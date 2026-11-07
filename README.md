@@ -89,9 +89,6 @@ abajo). Por cable los colores se guardan luego luego, con su parpadeo; el video
 y el visualizador se pausan hasta que regrese la radio, y lo sostenido se
 guarda en cuanto se conecta el cable.
 
-Ojo: el teclado guarda la luz aparte para cada enlace (efecto, barrita, sleep):
-lo que se pone por cable no es lo que se ve por el dongle.
-
 ## Lo medido en el teclado
 
 | qué | cuánto |
