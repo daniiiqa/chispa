@@ -694,8 +694,8 @@ fn on(t: &Teclado) -> Result<(), String> {
     Ok(())
 }
 
-/// Regresa los dos bloques al respaldo, pero solo los campos de la luz: lo
-/// demás del bloque de ajustes (Mac, polling, sleep) se queda como está hoy.
+/// Regresa los dos bloques al respaldo: la luz, la barrita y el sleep. Lo demás
+/// del bloque de ajustes (Mac, polling, la perilla) se queda como está hoy.
 pub(crate) fn restaurar(t: &Teclado) -> Result<bool, String> {
     let f = respaldo();
     let todo = std::fs::read(&f).map_err(|_| l("no hay respaldo: chispa todavía no ha escrito nada", "no backup: chispa hasn't written anything yet"))?;
@@ -727,6 +727,7 @@ pub(crate) fn restaurar(t: &Teclado) -> Result<bool, String> {
         b[10] = id;
     }
     luz::poner_lateral(&mut b, luz::lateral(r_luz));
+    luz::poner_dormir(&mut b, luz::dormir(r_luz));
     cambio |= guardar(t, &actual, &b, Some((&tabla, r_tabla)))?;
     Ok(cambio)
 }
