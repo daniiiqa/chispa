@@ -224,8 +224,13 @@ pub fn mezclar_mapa(de: &Mapa, a: &Mapa, x: f32) -> Mapa {
 
 /// Grupos de teclas del mismo color para un cuadro en vivo. Por radio un
 /// cuadro aguanta 126 bytes: se juntan en 10 colores (10 × 4 + 80 = 120).
+/// El grupo con más teclas va primero: cuando el teclado se queda sin cuadros un
+/// momento (tecleando, la radio se llena) pinta todo de un color, al parecer el
+/// del primer grupo; así el destello es el color que más se ve.
 pub fn grupos(m: &Mapa, radio: bool) -> Vec<(Rgb, Vec<u8>)> {
-    if radio { juntar(m, 10) } else { agrupar(m) }
+    let mut g = if radio { juntar(m, 10) } else { agrupar(m) };
+    g.sort_by_key(|x| std::cmp::Reverse(x.1.len()));
+    g
 }
 
 fn agrupar(m: &Mapa) -> Vec<(Rgb, Vec<u8>)> {
@@ -533,6 +538,20 @@ mod tests {
         assert!(bytes <= 126, "{bytes}");
         // por cable, cada color tal cual
         assert_eq!(grupos(&teclas, false).len(), 80);
+    }
+
+    #[test]
+    fn el_grupo_mas_grande_va_primero() {
+        // si el teclado se queda sin cuadros pinta todo del primer color: que sea el que más se ve
+        let mut m = mapa_uniforme((0, 0, 200));
+        for t in m.iter_mut().take(5) {
+            t.1 = (255, 0, 0);
+        }
+        for radio in [true, false] {
+            let g = grupos(&m, radio);
+            assert_eq!(g[0].0, (0, 0, 200), "radio {radio}");
+            assert!(g.windows(2).all(|w| w[0].1.len() >= w[1].1.len()));
+        }
     }
 
     #[test]
