@@ -1,8 +1,9 @@
 //! `chispa video`: con un wallpaper en video (mpvpaper), el teclado es una
 //! pantallita del wallpaper: cada tecla toma el color del pedazo de video que le
-//! queda encima. ffmpeg decodifica el mismo video en la GPU (VAAPI: un 4K por
-//! CPU costaba más de medio núcleo, por VAAPI casi nada), achicado a 48×18, y
-//! se sincroniza con mpvpaper preguntándole por su socket dónde va.
+//! queda encima. El video se achica una vez (48×18 a 15 cuadros por segundo,
+//! con ffmpeg por la GPU) y se guarda en ~/.cache/chispa/video; de ahí solo se
+//! lee el cuadro que toca según dónde va mpvpaper, que se le pregunta por su
+//! socket. No queda nada decodificando.
 //!
 //! Solo por radio: un cuadro aguanta 126 bytes, así que los colores se juntan
 //! en 10 (10 × 4 + 80 teclas = 120). Por cable se pausa: ahí los cuadros en
@@ -20,10 +21,8 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -33,10 +32,9 @@ const CUADRO: usize = ANCHO * ALTO * 3;
 /// por radio un cuadro de 10 colores son 9 paquetes, cada uno ~7 ms (5 de
 /// aire, más pegados se pierden): medido, 63 ms por cuadro. El techo es ~15;
 /// con menos colores no baja, las 80 teclas ya llenan casi todo
-const FPS_RADIO: u32 = 15;
-const RESINCRONIZAR: Duration = Duration::from_secs(5);
-/// más desfasado que esto con mpvpaper, se vuelve a arrancar ffmpeg
-const DESFASE_MAX: f64 = 0.3;
+const FPS: u32 = 15;
+/// cada cuánto se le pregunta a mpv dónde va (entre preguntas se cuenta el reloj)
+const CONSULTAR: Duration = Duration::from_secs(2);
 const REVISAR: Duration = Duration::from_secs(1);
 const REVISAR_ENLACE: Duration = Duration::from_secs(3);
 /// cuánto se espera a mpvpaper al entrar a la sesión
@@ -140,69 +138,106 @@ fn posicion(socket: &PathBuf) -> Option<f64> {
     None
 }
 
-fn duracion(video: &PathBuf) -> Option<f64> {
-    let out = Command::new("ffprobe")
-        .args(["-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1"])
-        .arg(video)
-        .output()
-        .ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
-}
-
 fn hay_vaapi() -> bool {
     std::path::Path::new("/dev/dri/renderD128").exists()
 }
 
-/// ffmpeg decodificando desde `desde`, al paso del video (-re), en bucle.
-struct Tubo {
-    hijo: Child,
-    rx: Receiver<Vec<u8>>,
-    desde: f64,
-    fps: u32,
-    cuadros: Arc<AtomicU64>,
+/// El video achicado (48×18 a 15 cuadros por segundo, ~2.6 KB por cuadro), en
+/// ~/.cache/chispa/video. Se saca una vez por video y de ahí solo se lee: antes
+/// ffmpeg decodificaba el 4K en vivo todo el tiempo, con ~370 MB de búferes de
+/// la GPU, y como nunca quedaba en sincronía se relanzaba cada 5 s.
+fn cache(video: &std::path::Path) -> Option<PathBuf> {
+    let m = std::fs::metadata(video).ok()?;
+    let cambio = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
+    let nombre = video.file_name()?.to_string_lossy();
+    let base = std::env::var("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache"));
+    Some(base.join("chispa/video").join(format!("{nombre}-{}-{cambio}-{FPS}fps.rgb", m.len())))
 }
 
-impl Tubo {
-    fn lanzar(video: &PathBuf, desde: f64, fps: u32, vaapi: bool) -> Result<Tubo, String> {
+/// Saca el video achicado (por la GPU si se puede), con prioridad baja.
+fn construir(video: &std::path::Path, destino: &std::path::Path) -> Result<(), String> {
+    std::fs::create_dir_all(destino.parent().ok_or("cache")?).map_err(|e| e.to_string())?;
+    let tmp = destino.with_extension("tmp");
+    let filtro = |vaapi: bool| {
+        if vaapi {
+            format!("fps={FPS},scale_vaapi=w=192:h=108,hwdownload,format=nv12,scale={ANCHO}:{ALTO}:flags=area,format=rgb24")
+        } else {
+            format!("fps={FPS},scale={ANCHO}:{ALTO}:flags=area,format=rgb24")
+        }
+    };
+    for vaapi in [hay_vaapi(), false] {
         let mut c = Command::new("ffmpeg");
-        c.args(["-nostdin", "-v", "error"]);
+        c.args(["-nostdin", "-v", "error", "-y"]);
         if vaapi {
             c.args(["-hwaccel", "vaapi", "-hwaccel_output_format", "vaapi"]);
         }
-        c.args(["-re", "-stream_loop", "-1", "-ss", &format!("{desde:.3}"), "-i"]).arg(video);
-        let filtro = if vaapi {
-            format!("fps={fps},scale_vaapi=w=192:h=108,hwdownload,format=nv12,scale={ANCHO}:{ALTO}:flags=area,format=rgb24")
-        } else {
-            format!("fps={fps},scale={ANCHO}:{ALTO}:flags=area,format=rgb24")
-        };
-        c.args(["-an", "-vf", &filtro, "-f", "rawvideo", "-"]);
-        let mut hijo = c.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
-        let mut salida = hijo.stdout.take().ok_or("ffmpeg: sin salida")?;
-        let (tx, rx) = channel();
-        let cuadros = Arc::new(AtomicU64::new(0));
-        let cuenta = Arc::clone(&cuadros);
-        std::thread::spawn(move || {
-            let mut b = vec![0u8; CUADRO];
-            while salida.read_exact(&mut b).is_ok() {
-                cuenta.fetch_add(1, Ordering::SeqCst);
-                if tx.send(b.clone()).is_err() {
-                    break;
-                }
+        c.arg("-i").arg(video).args(["-an", "-vf", &filtro(vaapi), "-f", "rawvideo"]).arg(&tmp);
+        let mut hijo = c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|e| format!("ffmpeg: {e}"))?;
+        // SAFETY: solo baja la prioridad de nuestro hijo.
+        unsafe { libc::setpriority(libc::PRIO_PROCESS, hijo.id(), 10) };
+        let ok = loop {
+            if PARAR.load(Ordering::SeqCst) {
+                let _ = hijo.kill();
+                let _ = hijo.wait();
+                let _ = std::fs::remove_file(&tmp);
+                return Err("parado".into());
             }
-        });
-        Ok(Tubo { hijo, rx, desde, fps, cuadros })
+            match hijo.try_wait() {
+                Ok(Some(st)) => break st.success(),
+                Ok(None) => sleep(Duration::from_millis(200)),
+                Err(e) => return Err(e.to_string()),
+            }
+        };
+        if ok && std::fs::metadata(&tmp).is_ok_and(|m| m.len() >= CUADRO as u64) {
+            return std::fs::rename(&tmp, destino).map_err(|e| e.to_string());
+        }
+        let _ = std::fs::remove_file(&tmp);
     }
-
-    /// Dónde va, según los cuadros que ya salieron.
-    fn posicion(&self, dur: f64) -> f64 {
-        (self.desde + self.cuadros.load(Ordering::SeqCst) as f64 / self.fps as f64) % dur.max(0.1)
-    }
+    Err(format!("ffmpeg no pudo achicar {}", video.display()))
 }
 
-impl Drop for Tubo {
-    fn drop(&mut self) {
-        let _ = self.hijo.kill();
-        let _ = self.hijo.wait();
+/// Los cuadros del video achicado, sacándolos si no están.
+fn cuadros_de(video: &std::path::Path) -> Result<Vec<u8>, String> {
+    let c = cache(video).ok_or_else(|| format!("{}: no se puede leer", video.display()))?;
+    if !c.exists() {
+        crate::anotar(&format!("achicando {} (una vez)…", video.display()));
+        let t0 = Instant::now();
+        construir(video, &c)?;
+        crate::anotar(&format!("listo en {:.1} s", t0.elapsed().as_secs_f64()));
+    }
+    let mut b = std::fs::read(&c).map_err(|e| format!("{}: {e}", c.display()))?;
+    b.truncate(b.len() / CUADRO * CUADRO);
+    if b.is_empty() {
+        return Err(format!("{}: vacío", c.display()));
+    }
+    Ok(b)
+}
+
+/// Dónde va mpv, contando el tiempo entre preguntas. Se le pregunta de vez en
+/// cuando; si no avanzó entre dos preguntas, está en pausa.
+struct Reloj {
+    pos: f64,
+    desde: Instant,
+    pausado: bool,
+    preguntado: Instant,
+}
+
+impl Reloj {
+    fn new(socket: Option<&PathBuf>) -> Reloj {
+        let pos = socket.and_then(posicion).unwrap_or(0.0);
+        Reloj { pos, desde: Instant::now(), pausado: false, preguntado: Instant::now() }
+    }
+
+    fn ahora(&mut self, socket: Option<&PathBuf>) -> f64 {
+        if self.preguntado.elapsed() >= CONSULTAR {
+            self.preguntado = Instant::now();
+            if let Some(p) = socket.and_then(posicion) {
+                self.pausado = (p - self.pos).abs() < 0.01;
+                self.pos = p;
+                self.desde = Instant::now();
+            }
+        }
+        if self.pausado { self.pos } else { self.pos + self.desde.elapsed().as_secs_f64() }
     }
 }
 
@@ -369,7 +404,6 @@ pub fn correr(args: &[String]) -> Result<(), String> {
         }
         sleep(Duration::from_millis(500));
     };
-    std::fs::write(archivo_pid(), std::process::id().to_string()).map_err(|e| e.to_string())?;
     // SAFETY: el manejador solo toca un atómico.
     unsafe {
         libc::signal(libc::SIGTERM, al_parar as *const () as libc::sighandler_t);
@@ -384,39 +418,46 @@ pub fn correr(args: &[String]) -> Result<(), String> {
 
 /// mpvpaper se fue: se espera a que llegue otro (cambiar de un video a otro)
 const ESPERA_OTRO: Duration = Duration::from_secs(6);
-/// sin cuadro nuevo por este rato, se repite el último: si no, el teclado
-/// regresa a lo guardado y se ve un parpadeo de otro color
-const REPETIR: Duration = Duration::from_millis(700);
+
+/// Mientras corre, `chispa hold` no pinta: el pid se anota solo al tocar.
+fn tocando(si: bool) {
+    if si {
+        let _ = std::fs::write(archivo_pid(), std::process::id().to_string());
+    } else {
+        let _ = std::fs::remove_file(archivo_pid());
+        let _ = std::fs::remove_file(archivo_medida());
+    }
+}
 
 fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
-    let mut dur = duracion(&mpv.video).ok_or_else(|| format!("ffprobe: {}", mpv.video.display()))?;
-    let vaapi = hay_vaapi();
     let teclas = crate::tui::posiciones();
+    // mientras se saca el cache, lo sostenido se sigue viendo
+    let mut cuadros = cuadros_de(&mpv.video)?;
+    let mut reloj = Reloj::new(mpv.socket.as_ref());
     let mut t: Option<Teclado> = None;
-    let mut tubo: Option<Tubo> = None;
-    // ffmpeg tarda en dar su primer cuadro: se arranca así de adelantado
-    let mut adelanto = 0.4f64;
-    let mut lanzado = Instant::now();
-    let mut primero = true;
-    let (mut revisado, mut sincronizado, mut buscado) = (Instant::now(), Instant::now(), Instant::now() - REVISAR_ENLACE);
+    let (mut revisado, mut buscado) = (Instant::now(), Instant::now() - REVISAR_ENLACE);
     let mut antes: HashMap<u8, [f32; 3]> = HashMap::new();
     let mut ultimo: Vec<(Rgb, Vec<u8>)> = Vec::new();
-    let mut enviado = Instant::now();
     let mut medida = Medida::new();
+    let paso = Duration::from_secs_f64(1.0 / FPS as f64);
+    let mut siguiente = Instant::now();
+    tocando(true);
     if !auto {
         println!("{}", l("siguiendo el video; Ctrl+C para parar", "following the video; Ctrl+C to stop"));
     }
     while !PARAR.load(Ordering::SeqCst) {
         if revisado.elapsed() >= REVISAR {
             revisado = Instant::now();
-            // otro wallpaper, se quitó el video, o ya no se sigue al wallpaper
             if !sigue_wallpaper() {
                 crate::anotar("ya no se sigue al wallpaper");
                 return Ok(());
             }
+            if crate::binario_viejo() {
+                drop(t.take());
+                crate::reiniciar();
+            }
             if !vivo(mpv.pid) {
                 // otro video: se le espera repitiendo el último cuadro
-                tubo = None;
                 let fin = Instant::now() + ESPERA_OTRO;
                 let nuevo = loop {
                     if let Some(m) = buscar_mpvpaper().filter(|m| m.pid != mpv.pid) {
@@ -436,20 +477,14 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
                     crate::anotar("se quitó el video");
                     return Ok(());
                 };
-                let Some(d) = duracion(&m.video) else {
-                    crate::anotar(&format!("ffprobe no leyó {}", m.video.display()));
-                    return Ok(());
-                };
                 crate::anotar(&format!("otro video: {}", m.video.display()));
-                (mpv, dur) = (m, d);
+                tocando(false);
+                cuadros = cuadros_de(&m.video)?;
+                reloj = Reloj::new(m.socket.as_ref());
+                mpv = m;
                 antes.clear();
+                tocando(true);
                 continue;
-            }
-            if crate::binario_viejo() {
-                // ffmpeg primero: con exec no correría su Drop
-                drop(tubo.take());
-                drop(t.take());
-                crate::reiniciar();
             }
         }
         // sin teclado, o llegó el cable y se anda por radio: se vuelve a buscar
@@ -459,97 +494,40 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
             if let Ok(n) = Teclado::abrir() {
                 n.soltar();
                 t = Some(n);
-                tubo = None;
             }
         }
-        // por cable no hay en vivo: se pausa hasta que regrese la radio
-        if t.as_ref().is_some_and(|n| !n.en_vivo()) {
-            tubo = None;
+        // al paso del video, sin amontonar
+        let ahora = Instant::now();
+        if ahora < siguiente {
+            sleep(siguiente - ahora);
+        }
+        siguiente = Instant::now().max(siguiente) + paso;
+        let Some(n) = &t else { continue };
+        // por cable no hay en vivo: nada hasta que regrese la radio
+        if !n.en_vivo() {
             let _ = std::fs::remove_file(archivo_medida());
             sleep(Duration::from_secs(1));
             continue;
         }
-        let fps = FPS_RADIO;
-        if parado(mpv.pid) {
-            // pausado: se queda el último cuadro
-            tubo = None;
-            if let Some(n) = &t
-                && !ultimo.is_empty()
-                && enviado.elapsed() >= Duration::from_millis(800)
-            {
-                enviado = Instant::now();
-                let _ = n.cuadro(&ultimo);
-            }
-            sleep(Duration::from_millis(200));
-            continue;
-        }
-        let pos_mpv = || mpv.socket.as_ref().and_then(posicion);
-        if tubo.is_none() {
-            let desde = (pos_mpv().unwrap_or(0.0) + adelanto) % dur;
-            tubo = Some(Tubo::lanzar(&mpv.video, desde, fps, vaapi)?);
-            lanzado = Instant::now();
-            primero = true;
-            sincronizado = Instant::now();
-        }
-        if sincronizado.elapsed() >= RESINCRONIZAR {
-            sincronizado = Instant::now();
-            if let (Some(p), Some(tb)) = (pos_mpv(), &tubo) {
-                let d = (tb.posicion(dur) - p).rem_euclid(dur);
-                let desfase = d.min(dur - d);
-                if desfase > DESFASE_MAX {
-                    crate::anotar(&format!("desfasado {desfase:.2} s de mpvpaper: vuelvo a lanzar ffmpeg"));
-                    tubo = None;
-                    continue;
-                }
-            }
-        }
-        let Some(tb) = &tubo else { continue };
-        let cuadro = match tb.rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(c) => tb.rx.try_iter().last().unwrap_or(c),
-            Err(RecvTimeoutError::Timeout) => {
-                if let Some(n) = &t
-                    && !ultimo.is_empty()
-                    && enviado.elapsed() >= REPETIR
-                {
-                    enviado = Instant::now();
-                    let _ = n.cuadro(&ultimo);
-                }
-                continue;
-            }
-            Err(RecvTimeoutError::Disconnected) => {
-                // ffmpeg se murió (¿sin VAAPI?): de nuevo en un rato
-                crate::anotar("ffmpeg se murió: lo vuelvo a lanzar");
-                tubo = None;
-                if let Some(n) = &t
-                    && !ultimo.is_empty()
-                {
-                    let _ = n.cuadro(&ultimo);
-                }
-                sleep(Duration::from_secs(1));
-                continue;
-            }
-        };
-        if primero {
-            primero = false;
-            adelanto = lanzado.elapsed().as_secs_f64().clamp(0.1, 2.0);
-        }
-        let Some(n) = &t else { continue };
+        let total = cuadros.len() / CUADRO;
+        let pos = if parado(mpv.pid) { reloj.pos } else { reloj.ahora(mpv.socket.as_ref()) };
+        let i = ((pos * FPS as f64) as usize) % total;
+        let cuadro = &cuadros[i * CUADRO..(i + 1) * CUADRO];
         let mut colores = Vec::with_capacity(teclas.len());
-        for (led, c) in de_teclas(&cuadro, &teclas) {
+        for (led, c) in de_teclas(cuadro, &teclas) {
             let p = antes.get(&led).copied().unwrap_or(c);
             let s = [0, 1, 2].map(|i| p[i] * SUAVE + c[i] * (1.0 - SUAVE));
             antes.insert(led, s);
             colores.push((led, realzar(s)));
         }
-        let grupos = luz::grupos(&colores, n.enlace() != Enlace::Cable);
-        let antes_de_mandar = Instant::now();
+        let grupos = luz::grupos(&colores, true);
+        let t0 = Instant::now();
         if n.cuadro(&grupos).is_err() {
             t = None;
             continue;
         }
-        medida.contar(antes_de_mandar.elapsed(), n.enlace());
+        medida.contar(t0.elapsed(), n.enlace());
         ultimo = grupos;
-        enviado = Instant::now();
     }
     Ok(())
 }
