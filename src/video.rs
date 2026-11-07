@@ -411,6 +411,7 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
             revisado = Instant::now();
             // otro wallpaper, se quitó el video, o ya no se sigue al wallpaper
             if !sigue_wallpaper() {
+                crate::anotar("ya no se sigue al wallpaper");
                 return Ok(());
             }
             if !vivo(mpv.pid) {
@@ -431,8 +432,15 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
                     }
                     sleep(Duration::from_millis(400));
                 };
-                let Some(m) = nuevo else { return Ok(()) };
-                let Some(d) = duracion(&m.video) else { return Ok(()) };
+                let Some(m) = nuevo else {
+                    crate::anotar("se quitó el video");
+                    return Ok(());
+                };
+                let Some(d) = duracion(&m.video) else {
+                    crate::anotar(&format!("ffprobe no leyó {}", m.video.display()));
+                    return Ok(());
+                };
+                crate::anotar(&format!("otro video: {}", m.video.display()));
                 (mpv, dur) = (m, d);
                 antes.clear();
                 continue;
@@ -489,6 +497,7 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
                 let d = (tb.posicion(dur) - p).rem_euclid(dur);
                 let desfase = d.min(dur - d);
                 if desfase > DESFASE_MAX {
+                    crate::anotar(&format!("desfasado {desfase:.2} s de mpvpaper: vuelvo a lanzar ffmpeg"));
                     tubo = None;
                     continue;
                 }
@@ -509,6 +518,7 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
             }
             Err(RecvTimeoutError::Disconnected) => {
                 // ffmpeg se murió (¿sin VAAPI?): de nuevo en un rato
+                crate::anotar("ffmpeg se murió: lo vuelvo a lanzar");
                 tubo = None;
                 if let Some(n) = &t
                     && !ultimo.is_empty()

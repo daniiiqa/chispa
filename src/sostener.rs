@@ -180,7 +180,10 @@ fn bucle() -> Result<(), String> {
     let mut revisado = Instant::now();
     loop {
         // lo borraron: alguien más ya se encargó
-        let Some(c) = leer_mapa() else { return Ok(()) };
+        let Some(c) = leer_mapa() else {
+            crate::anotar("me quitaron lo sostenido: me voy sin guardar");
+            return Ok(());
+        };
         if revisado.elapsed() >= REVISAR_ENLACE {
             revisado = Instant::now();
             if crate::binario_viejo() {
@@ -198,13 +201,22 @@ fn bucle() -> Result<(), String> {
             }
         }
         // llegó el cable: no se puede sostener en vivo, se guarda ya
-        if t.as_ref().is_some_and(|n| !n.en_vivo()) {
-            GUARDAR.store(true, Ordering::SeqCst);
+        if t.as_ref().is_some_and(|n| !n.en_vivo()) && !GUARDAR.swap(true, Ordering::SeqCst) {
+            crate::anotar("llegó el cable: guardo ya");
         }
         if GUARDAR.load(Ordering::SeqCst) {
             match t.as_ref().map(|n| guardar(n, &c)) {
-                Some(Ok(())) => return Ok(()),
-                _ => {
+                Some(Ok(())) => {
+                    crate::anotar("guardado en el teclado");
+                    return Ok(());
+                }
+                r => {
+                    // una vez, no cada intento: dormido, esto se repite por horas
+                    if let Some(Err(e)) = r
+                        && fallos == 0
+                    {
+                        crate::anotar(&format!("no pude guardar (queda pendiente): {e}"));
+                    }
                     // dormido o desconectado: queda pendiente y se vuelve a
                     // intentar al rato. Al salir de la sesión no hay más tiempo.
                     fallos += 1;

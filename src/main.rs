@@ -127,6 +127,7 @@ pub(crate) fn binario_viejo() -> bool {
 /// Se vuelve a lanzar con el binario nuevo, mismo pid y mismos argumentos.
 pub(crate) fn reiniciar() {
     use std::os::unix::process::CommandExt;
+    anotar("binario nuevo: me reinicio con él");
     let Ok(p) = std::fs::read_link("/proc/self/exe") else { return };
     let ruta = PathBuf::from(p.to_string_lossy().trim_end_matches(" (deleted)").to_string());
     let e = std::process::Command::new(ruta).args(std::env::args_os().skip(1)).exec();
@@ -785,9 +786,54 @@ fn correr(args: &[String]) -> Result<(), String> {
     }
 }
 
+/// Lo que corre de fondo (sin terminal que lo enseñe).
+fn de_fondo(args: &[String]) -> bool {
+    matches!(args.first().map(String::as_str), Some("hold" | "video")) || args.iter().any(|a| a == "--auto")
+}
+
+/// Una línea en ~/.local/state/chispa/log, con la hora. Lo de fondo manda su
+/// salida a /dev/null: sin esto, cuando algo falla nadie se entera (pasó con el
+/// hold viejo que pintaba azul). Nunca lleva lo que tecleas, solo qué pasó. Al
+/// pasar de 64 KB se queda con la mitad más nueva.
+pub(crate) fn anotar(que: &str) {
+    let f = estado_dir().join("log");
+    let _ = std::fs::create_dir_all(estado_dir());
+    if std::fs::metadata(&f).is_ok_and(|m| m.len() > 64 * 1024)
+        && let Ok(t) = std::fs::read_to_string(&f)
+    {
+        let mitad = t.len() / 2;
+        let corte = t[mitad..].find('\n').map_or(mitad, |i| mitad + i + 1);
+        let _ = std::fs::write(&f, &t[corte..]);
+    }
+    let linea = format!("{} [{}] {que}\n", hora(), std::process::id());
+    let _ = std::fs::OpenOptions::new().create(true).append(true).open(&f).and_then(|mut f| std::io::Write::write_all(&mut f, linea.as_bytes()));
+}
+
+/// "2026-11-07 13:05:09", hora local.
+fn hora() -> String {
+    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as libc::time_t;
+    // SAFETY: localtime_r solo escribe en `tm`, que vive aquí.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return t.to_string();
+    }
+    format!("{}-{:02}-{:02} {:02}:{:02}:{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    if let Err(e) = correr(&args) {
+    let fondo = de_fondo(&args);
+    if fondo {
+        anotar(&format!("empieza: chispa {}", args.join(" ")));
+    }
+    let r = correr(&args);
+    if fondo {
+        match &r {
+            Ok(()) => anotar("termina"),
+            Err(e) => anotar(&format!("error: {e}")),
+        }
+    }
+    if let Err(e) = r {
         eprintln!("chispa: {e}");
         std::process::exit(1);
     }

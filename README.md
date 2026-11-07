@@ -53,7 +53,9 @@ comía lo que tecleabas). Por cable los colores se guardan luego luego, con su
 parpadeo; el video y el visualizador se pausan hasta que regrese la radio, y lo
 sostenido se guarda en cuanto se conecta el cable.
 
-`chispa` dice si hay un color en vivo sin guardar. Lo demás (efectos, brillo,
+`chispa` dice si hay un color en vivo sin guardar. Lo que hace lo de fondo (`hold`, `video`, el
+gancho del wallpaper) queda en `~/.local/state/chispa/log`: qué pasó y los
+errores, nunca lo que tecleas. Lo demás (efectos, brillo,
 una tecla, la barrita, el sleep) se guarda como siempre: primero el de fondo
 guarda lo suyo. Apagar se funde a negro y guarda a oscuras, sin que se vea;
 prender sube desde negro y parpadea al guardar.
