@@ -102,7 +102,7 @@ un efecto a mano deja de seguirlo.
 
 Con un wallpaper en video (mpvpaper), `chispa video` lo sigue en vivo (solo
 por radio, ~15 cuadros por segundo: es el techo medido, 9 paquetes de ~7 ms).
-Cada video se achica una vez con ffmpeg por la GPU (48×18, ~3 MB por minuto)
+Cada video se achica una vez con ffmpeg por la GPU (48×18, ~2.3 MB por minuto)
 en `~/.cache/chispa/video`; de ahí solo se lee el cuadro que toca según dónde
 va mpvpaper, que se le pregunta por su socket (`input-ipc-server`, que pone
 `WallpaperSelect.sh`). No se queda nada decodificando. Lo lanza solo el gancho

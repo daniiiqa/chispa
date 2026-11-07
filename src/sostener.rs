@@ -48,7 +48,10 @@ fn archivo_pid() -> PathBuf {
 
 /// Un renglón por tecla: "led #rrggbb". Un solo "#rrggbb" es todo el teclado.
 fn leer_mapa() -> Option<Mapa> {
-    let t = std::fs::read_to_string(archivo_color()).ok()?;
+    de_texto(&std::fs::read_to_string(archivo_color()).ok()?)
+}
+
+fn de_texto(t: &str) -> Option<Mapa> {
     let mut m = Mapa::new();
     for r in t.lines().map(str::trim).filter(|r| !r.is_empty()) {
         match r.split_once(' ') {
@@ -62,9 +65,12 @@ fn leer_mapa() -> Option<Mapa> {
 fn escribir_mapa(m: &Mapa) -> Result<(), String> {
     let f = archivo_color();
     let tmp = f.with_extension("tmp");
-    let t: String = m.iter().map(|(led, (r, g, b))| format!("{led} #{r:02x}{g:02x}{b:02x}\n")).collect();
-    std::fs::write(&tmp, t).map_err(|e| format!("{}: {e}", tmp.display()))?;
+    std::fs::write(&tmp, a_texto(m)).map_err(|e| format!("{}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, &f).map_err(|e| format!("{}: {e}", f.display()))
+}
+
+fn a_texto(m: &Mapa) -> String {
+    m.iter().map(|(led, (r, g, b))| format!("{led} #{r:02x}{g:02x}{b:02x}\n")).collect()
 }
 
 /// El de fondo, si está corriendo (y es chispa, no otro con el mismo pid).
@@ -235,5 +241,21 @@ fn bucle() -> Result<(), String> {
             t = None;
         }
         sleep(ENTRE_CUADROS);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn el_archivo_de_lo_sostenido_va_y_viene() {
+        let m: Mapa = luz::TECLAS.iter().enumerate().map(|(i, k)| (k.1 as u8, (i as u8, 255 - i as u8, 7))).collect();
+        assert_eq!(de_texto(&a_texto(&m)), Some(m));
+        // el formato viejo, un solo color, también se entiende
+        assert_eq!(de_texto("#102030\n"), Some(luz::mapa_uniforme((0x10, 0x20, 0x30))));
+        // y lo roto no se sostiene
+        assert_eq!(de_texto("3 #zzzzzz\n"), None);
+        assert_eq!(de_texto(""), None);
     }
 }

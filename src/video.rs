@@ -419,6 +419,12 @@ pub fn correr(args: &[String]) -> Result<(), String> {
 /// mpvpaper se fue: se espera a que llegue otro (cambiar de un video a otro)
 const ESPERA_OTRO: Duration = Duration::from_secs(6);
 
+/// El cuadro que toca a los `pos` segundos: mpv da la vuelta al video y su
+/// reloj también, pero entre preguntas se cuenta de más, así que se envuelve.
+fn indice(pos: f64, total: usize) -> usize {
+    ((pos.max(0.0) * FPS as f64) as usize) % total.max(1)
+}
+
 /// Mientras corre, `chispa hold` no pinta: el pid se anota solo al tocar.
 fn tocando(si: bool) {
     if si {
@@ -511,7 +517,7 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
         }
         let total = cuadros.len() / CUADRO;
         let pos = if parado(mpv.pid) { reloj.pos } else { reloj.ahora(mpv.socket.as_ref()) };
-        let i = ((pos * FPS as f64) as usize) % total;
+        let i = indice(pos, total);
         let cuadro = &cuadros[i * CUADRO..(i + 1) * CUADRO];
         let mut colores = Vec::with_capacity(teclas.len());
         for (led, c) in de_teclas(cuadro, &teclas) {
@@ -535,6 +541,15 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn el_cuadro_da_la_vuelta_con_el_video() {
+        assert_eq!(indice(0.0, 100), 0);
+        assert_eq!(indice(1.0, 100), FPS as usize);
+        // pasado el final (el reloj contó de más) regresa al principio
+        assert_eq!(indice(100.0 / FPS as f64, 100), 0);
+        assert_eq!(indice(-1.0, 100), 0);
+    }
 
     #[test]
     fn cada_tecla_lee_su_pedazo() {

@@ -75,6 +75,19 @@ const AYUDA_EN: &str = "chispa: lighting for the AULA F75 (wired, 2.4 GHz or Blu
 Colors: red orange yellow green cyan blue purple pink white, off, or #rrggbb.
 `mode` only takes: red green blue yellow purple cyan white multi.";
 
+/// Qué fundido toca antes de guardar (de, a), con lo que se ve sin negros: al
+/// apagar, a negro; al prender, desde negro (apagado sí enseña cuadros, probado);
+/// a otros colores, del de antes al nuevo. Nada si no hay qué fundir.
+fn fundido(antes: u8, ahora: u8, de: Option<luz::Mapa>, a: Option<luz::Mapa>) -> Option<(luz::Mapa, luz::Mapa)> {
+    let negro = luz::mapa_uniforme((0, 0, 0));
+    match (antes != 0, de, a) {
+        (true, Some(de), _) if ahora == 0 => Some((de, negro)),
+        (true, Some(de), Some(a)) if de != a => Some((de, a)),
+        (false, _, Some(a)) => Some((negro, a)),
+        _ => None,
+    }
+}
+
 /// lo que tarda en pasar de un color a otro
 const FUNDIDO: std::time::Duration = std::time::Duration::from_millis(400);
 
@@ -198,16 +211,8 @@ pub(crate) fn guardar(t: &Teclado, antes: &[u8], ahora: &[u8], tabla: Option<(&[
     // lo sostenido en vivo es lo que se ve, aunque lo guardado sea otro
     let de = t.visto().or(de).filter(|m| !luz::es_negro(m));
     let a = a.filter(|m| !luz::es_negro(m));
-    let negro = luz::mapa_uniforme((0, 0, 0));
-    if luz::activo(antes) != 0 && let Some(de) = &de {
-        let hacia = if luz::activo(ahora) == 0 { Some(&negro) } else { a.as_ref() };
-        if let Some(hacia) = hacia.filter(|h| *h != de) {
-            t.fundir(de, hacia, FUNDIDO);
-        }
-    } else if luz::activo(antes) == 0 && let Some(a) = &a {
-        // apagado sí enseña cuadros en vivo (probado): se sube desde negro y luego
-        // se guarda, con su parpadeo
-        t.fundir(&negro, a, FUNDIDO);
+    if let Some((de, a)) = fundido(luz::activo(antes), luz::activo(ahora), de, a) {
+        t.fundir(&de, &a, FUNDIDO);
     }
     let intento = (|| -> Result<(), String> {
         // primero se prende la tabla, luego sus colores
@@ -849,4 +854,25 @@ fn dump(t: &Teclado) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn el_fundido_que_toca() {
+        let (r, b) = (luz::mapa_uniforme((255, 0, 0)), luz::mapa_uniforme((0, 0, 255)));
+        let negro = luz::mapa_uniforme((0, 0, 0));
+        // apagar: a negro
+        assert_eq!(fundido(21, 0, Some(r.clone()), None), Some((r.clone(), negro.clone())));
+        // prender: desde negro
+        assert_eq!(fundido(0, 21, None, Some(b.clone())), Some((negro, b.clone())));
+        // otro color
+        assert_eq!(fundido(21, 21, Some(r.clone()), Some(b.clone())), Some((r.clone(), b)));
+        // lo mismo (solo cambió la barrita): nada
+        assert_eq!(fundido(21, 21, Some(r.clone()), Some(r.clone())), None);
+        // un efecto que se mueve solo: no se sabe qué se ve, nada
+        assert_eq!(fundido(3, 21, None, Some(r)), None);
+    }
 }

@@ -92,6 +92,11 @@ pub enum Enlace {
 }
 
 impl Enlace {
+    /// Si se le pueden mandar cuadros en vivo (ver Teclado::en_vivo).
+    pub fn en_vivo(self) -> bool {
+        self != Enlace::Cable
+    }
+
     pub fn nombre(self) -> String {
         match self {
             Enlace::Cable => l("cable", "wired"),
@@ -192,6 +197,13 @@ fn abrir_nodo(ruta: &Path) -> Result<File, String> {
         .map_err(|err| format!("{}: {err} ({})", ruta.display(), l("¿falta la regla de udev? mira el README", "is the udev rule missing? see the README")))
 }
 
+/// Repetir lo sostenido solo en la espera de ANTES de empezar (quieto > 0). Entre
+/// paquetes de una escritura se espera con quieto = 0, y un cuadro ahí la echa a
+/// perder (probado: el teclado guardó mal y chispa lo regresó).
+fn puede_mantener(quieto: Duration) -> bool {
+    !quieto.is_zero()
+}
+
 /// Si el cable está conectado (sin abrir nada): los de fondo se pasan a él.
 pub fn hay_cable() -> bool {
     fs::read_dir("/sys/class/hidraw").is_ok_and(|d| d.flatten().any(|e| uevent(&e.path(), "HID_ID").is_some_and(|id| id.to_uppercase() == CABLE_ID)))
@@ -281,7 +293,7 @@ impl Teclado {
     /// de ~1 ms sin importar cuánto traiga (medido: completo, grupos sub 1 y
     /// sub 2, todos 66 ms). Por radio no pasa: va por el aire, no por el USB.
     pub fn en_vivo(&self) -> bool {
-        self.enlace != Enlace::Cable
+        self.enlace.en_vivo()
     }
 
     /// Un cuadro al momento y sin soltar el candado, para ver el color mientras
@@ -471,7 +483,7 @@ impl Teclado {
         let bt = self.enlace == Enlace::Bluetooth;
         loop {
             // antes de empezar, nunca entre paquetes: a media escritura la echa a perder
-            if !quieto.is_zero() {
+            if puede_mantener(quieto) {
                 self.mantener();
             }
             let mut abajo = self.abajo.borrow_mut();
@@ -611,6 +623,21 @@ fn nodos_de_teclas(id: &str) -> Vec<File> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn por_cable_nunca_hay_cuadros_en_vivo() {
+        // se comía las teclas: 66 ms por cuadro sin leer el teclado
+        assert!(!Enlace::Cable.en_vivo());
+        assert!(Enlace::Dongle.en_vivo() && Enlace::Bluetooth.en_vivo());
+    }
+
+    #[test]
+    fn nunca_un_cuadro_a_media_escritura() {
+        // escribir_radio espera con QUIETO antes y con 0 entre paquetes
+        assert!(puede_mantener(QUIETO));
+        assert!(!puede_mantener(Duration::ZERO));
+    }
+
     use super::*;
 
     const DESC_DONGLE: &[u8] = &[0x06, 0x02, 0xff, 0x09, 0x02, 0xa1, 0x01, 0x85, 0x13, 0x15, 0x00];
