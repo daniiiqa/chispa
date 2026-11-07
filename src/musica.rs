@@ -170,23 +170,46 @@ pub fn correr(args: &[String]) -> Result<(), String> {
     if let Some(t) = &t {
         t.soltar();
     }
-    let (mut hijo, rx) = lanzar_cava()?;
     poner_modo("music")?;
     // SAFETY: al_ctrl_c solo toca un atómico.
     unsafe { libc::signal(libc::SIGINT, al_ctrl_c as *const () as libc::sighandler_t) };
     if !auto {
         println!("{}", l("visualizador prendido; Ctrl+C para parar", "visualizer on; Ctrl+C to stop"));
     }
-    let r = bucle(&mut t, &rx);
-    let _ = hijo.kill();
-    let _ = hijo.wait();
+    let r = loop {
+        let (mut hijo, rx) = lanzar_cava()?;
+        let r = bucle(&mut t, &rx);
+        let _ = hijo.kill();
+        let _ = hijo.wait();
+        if !matches!(r, Ok(true)) {
+            break r.map(|_| ());
+        }
+        // por cable no hay en vivo: sin cava hasta que regrese la radio
+        crate::anotar("llegó el cable: pauso el visualizador");
+        if !auto {
+            println!("{}", l("por cable no se puede: en pausa hasta que regrese la radio", "can't over cable: paused until back on radio"));
+        }
+        while crate::hid::hay_cable() && en_musica_aun() && !CTRL_C.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        if !en_musica_aun() || CTRL_C.load(Ordering::SeqCst) {
+            break Ok(());
+        }
+        crate::anotar("regresó la radio: sigo con el visualizador");
+        t = None;
+    };
     if CTRL_C.load(Ordering::SeqCst) {
         return poner_modo("custom");
     }
     r
 }
 
-fn bucle(t: &mut Option<Teclado>, rx: &Receiver<[u8; BANDAS]>) -> Result<(), String> {
+fn en_musica_aun() -> bool {
+    modo_actual().as_deref() == Some("music")
+}
+
+/// Ok(true): se conectó el cable y hay que pausar (sin cuadros en vivo por cable).
+fn bucle(t: &mut Option<Teclado>, rx: &Receiver<[u8; BANDAS]>) -> Result<bool, String> {
     let mut wall = wallpaper_de_ahora();
     let color = |w: &Option<PathBuf>| w.as_ref().and_then(|p| crate::color_del_wallpaper(p.to_str()).ok()).unwrap_or((0, 200, 255));
     let mut colores = colores_de(color(&wall));
@@ -197,13 +220,13 @@ fn bucle(t: &mut Option<Teclado>, rx: &Receiver<[u8; BANDAS]>) -> Result<(), Str
     let mut modo_visto = Instant::now();
     loop {
         if CTRL_C.load(Ordering::SeqCst) {
-            return Ok(());
+            return Ok(false);
         }
         // lo que se escoge a mano (o desde el menú) apaga el visualizador
         if modo_visto.elapsed() >= Duration::from_secs(1) {
             modo_visto = Instant::now();
             if modo_actual().as_deref() != Some("music") {
-                return Ok(());
+                return Ok(false);
             }
         }
         let niveles = match rx.recv_timeout(Duration::from_secs(1)) {
@@ -211,7 +234,7 @@ fn bucle(t: &mut Option<Teclado>, rx: &Receiver<[u8; BANDAS]>) -> Result<(), Str
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => {
                 if CTRL_C.load(Ordering::SeqCst) {
-                    return Ok(());
+                    return Ok(false);
                 }
                 return Err(l("cava se murió", "cava died"));
             }
@@ -245,6 +268,9 @@ fn bucle(t: &mut Option<Teclado>, rx: &Receiver<[u8; BANDAS]>) -> Result<(), Str
             enlace_visto = Instant::now() - REVISAR_ENLACE + REINTENTO;
             continue;
         };
+        if !tec.en_vivo() {
+            return Ok(true);
+        }
         ultimo_cuadro = Instant::now();
         if tec.cuadro(&grupos(&niveles, &colores)).is_err() {
             // se fue (lo desconectaron, cambió de modo): se sigue buscando

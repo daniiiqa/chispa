@@ -865,7 +865,13 @@ fn dibujar(f: &mut Frame, app: &App, look: &Look) {
         _ => None,
     };
     if let Some(m) = modo {
-        cabeza.push(Span::styled(format!("  · {m}"), Style::new().fg(t.muted)));
+        // por cable no hay en vivo: el visualizador y el video se pausan
+        let pausa = if crate::hid::hay_cable() && (crate::en_musica() || crate::video::hay_mpvpaper()) {
+            format!(" ({})", l("en pausa por cable", "paused on cable"))
+        } else {
+            String::new()
+        };
+        cabeza.push(Span::styled(format!("  · {m}{pausa}"), Style::new().fg(t.muted)));
     }
     if let Some((_, fps, ms)) = crate::video::medida() {
         cabeza.push(Span::styled(format!("  · video {fps:.0} fps ({ms:.0} ms)"), Style::new().fg(t.muted)));

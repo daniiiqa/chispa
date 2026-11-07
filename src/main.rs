@@ -823,7 +823,7 @@ fn correr(args: &[String]) -> Result<(), String> {
 
 /// Lo que corre de fondo (sin terminal que lo enseñe).
 fn de_fondo(args: &[String]) -> bool {
-    matches!(args.first().map(String::as_str), Some("hold" | "video")) || args.iter().any(|a| a == "--auto")
+    matches!(args.first().map(String::as_str), Some("hold" | "video" | "music")) || args.iter().any(|a| a == "--auto")
 }
 
 /// Una línea en ~/.local/state/chispa/log, con la hora. Lo de fondo manda su
