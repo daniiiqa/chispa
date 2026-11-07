@@ -130,6 +130,28 @@ pub fn poner_lateral(b: &mut [u8], modo: u8) {
 /// Cuánto espera el teclado sin teclear para apagar las luces (por 2.4 GHz o
 /// Bluetooth), en medios minutos. 0 = nunca. De fábrica: 2 (1 minuto).
 pub const DORMIR: usize = 24;
+/// La perilla: 0 volumen (girar = volumen, apretar = silencio), 1 luz (girar =
+/// brillo, apretar = siguiente efecto). Dejarla apretada la cambia en el teclado.
+pub const PERILLA: usize = 26;
+pub const MODOS_PERILLA: [&str; 2] = ["volume", "lighting"];
+
+pub fn perilla(b: &[u8]) -> u8 {
+    b[PERILLA]
+}
+
+pub fn poner_perilla(b: &mut [u8], modo: u8) {
+    if (modo as usize) < MODOS_PERILLA.len() {
+        b[PERILLA] = modo;
+    }
+}
+
+/// Lo que se iba a guardar, encima de lo que el teclado tiene AHORITA: los bytes
+/// que no se quisieron cambiar se quedan como los tiene el teclado. Si no, una
+/// copia vieja regresaría cosas que cambiaste en el teclado mientras tanto (la
+/// perilla, con su apretón largo; a Aula Control le pasó).
+pub fn encima(antes: &[u8], ahora: &[u8], fresco: &[u8]) -> Vec<u8> {
+    (0..fresco.len()).map(|i| if antes.get(i) == ahora.get(i) { fresco[i] } else { ahora[i] }).collect()
+}
 pub const MAX_DORMIR: u8 = 40;
 /// Las que ofrece la app oficial, en medios minutos.
 pub const OPCIONES_DORMIR: [u8; 10] = [0, 2, 3, 4, 6, 8, 10, 20, 30, 40];
@@ -163,12 +185,14 @@ pub fn solo_luz(antes: &[u8], ahora: &[u8]) -> bool {
     let o = lugar(id.max(1));
     let lateral_ok = (ahora[LATERAL] as usize) < MODOS_LATERAL.len();
     let dormir_ok = ahora[DORMIR] <= MAX_DORMIR;
+    let perilla_ok = (ahora[PERILLA] as usize) < MODOS_PERILLA.len();
     (0..LARGO_LUZ).all(|i| {
         antes[i] == ahora[i]
             || i == 9
             || i == 10
             || (i == LATERAL && lateral_ok)
             || (i == DORMIR && dormir_ok)
+            || (i == PERILLA && perilla_ok)
             || (id >= 1 && (i == o || i == o + 1))
     })
 }
@@ -568,6 +592,33 @@ mod tests {
             pintar(&mut t, led as usize, c);
         }
         assert_eq!(mapa_de_tabla(&t), mapa_uniforme((1, 2, 3)));
+    }
+
+    #[test]
+    fn lo_que_cambiaste_en_el_teclado_no_se_pisa() {
+        let antes = SANO;
+        // la copia de la TUI: cambió el brillo del efecto activo
+        let mut ahora = SANO;
+        poner(&mut ahora, 3, Some(4), None, None);
+        // mientras tanto, en el teclado, la perilla pasó a luz
+        let mut fresco = SANO;
+        fresco[PERILLA] = 1 - SANO[PERILLA];
+        let m = encima(&antes, &ahora, &fresco);
+        assert_eq!(m[PERILLA], fresco[PERILLA], "la perilla se queda como la dejaste");
+        assert_eq!(ajustes(&m, 3).0, 4, "y el brillo sí se cambia");
+        assert!(solo_luz(&fresco, &m));
+    }
+
+    #[test]
+    fn la_perilla_solo_tiene_dos_modos() {
+        let mut b = SANO;
+        poner_perilla(&mut b, 0);
+        assert_eq!(perilla(&b), 0);
+        assert!(solo_luz(&SANO, &b));
+        poner_perilla(&mut b, 9);
+        assert_eq!(perilla(&b), 0, "un modo que no existe no se pone");
+        b[PERILLA] = 7;
+        assert!(!solo_luz(&SANO, &b));
     }
 
     #[test]

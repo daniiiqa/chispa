@@ -61,6 +61,7 @@ const VELOCIDAD: usize = 1;
 const COLOR: usize = 2;
 const LATERAL: usize = 3;
 const SUENO: usize = 4;
+const PERILLA: usize = 5;
 
 /// Lo que hay debajo del ratón. Se anota al dibujar, así lo que se ve y lo que
 /// se puede picar nunca se desacomodan.
@@ -252,6 +253,7 @@ impl App {
         }
         v.push(LATERAL);
         v.push(SUENO);
+        v.push(PERILLA);
         v
     }
 
@@ -291,7 +293,10 @@ impl App {
     /// Cambia un ajuste en borrador: `nuevo(valor, tope)`.
     fn ajustar(&mut self, cual: usize, nuevo: impl Fn(u8, u8) -> u8, ahora: Instant) {
         let antes = self.b_luz.clone();
-        if cual == SUENO {
+        if cual == PERILLA {
+            let v = nuevo(luz::perilla(&self.b_luz), luz::MODOS_PERILLA.len() as u8 - 1);
+            luz::poner_perilla(&mut self.b_luz, v);
+        } else if cual == SUENO {
             // se camina por las opciones de la app, no de medio en medio minuto
             let op = luz::OPCIONES_DORMIR;
             let ahora_ = luz::dormir(&self.b_luz);
@@ -1052,7 +1057,7 @@ fn ajustes(f: &mut Frame, a: Rect, app: &App, look: &Look) {
         p.push((Span::styled(format!(" {v}/{max}"), Style::new().fg(t.fg)), Some(Clic::Fila(cual))));
         p
     };
-    let nombres = [l("brillo", "brightness"), l("velocidad", "speed"), "color".to_string(), l("barrita", "side light"), l("dormir", "sleep")];
+    let nombres = [l("brillo", "brightness"), l("velocidad", "speed"), "color".to_string(), l("barrita", "side light"), l("dormir", "sleep"), l("perilla", "knob")];
     let elegido = app.ajuste_visible();
     let mut filas = Vec::new();
     for (n, cual) in app.visibles().into_iter().enumerate() {
@@ -1076,6 +1081,14 @@ fn ajustes(f: &mut Frame, a: Rect, app: &App, look: &Look) {
                         let tinta = if claro { Color::Black } else { Color::White };
                         p.push((Span::styled(format!(" {marca} "), Style::new().bg(rgb(c)).fg(tinta)), Some(Clic::Ajuste(COLOR, i))));
                     }
+                    p.push((Span::raw(" "), None));
+                }
+            }
+            PERILLA => {
+                let actual = luz::perilla(&app.b_luz);
+                for i in 0..luz::MODOS_PERILLA.len() as u8 {
+                    let st = if actual == i { Style::new().fg(t.base).bg(t.primary).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.muted) };
+                    p.push((Span::styled(format!(" {} ", look.tx(&crate::nombre_perilla(i))), st), Some(Clic::Ajuste(PERILLA, i))));
                     p.push((Span::raw(" "), None));
                 }
             }
@@ -1340,7 +1353,7 @@ mod tests {
         assert_eq!(a.b_luz, bloque());
         // apagado solo queda la barrita
         luz::apagar(&mut a.b_luz);
-        assert_eq!(a.visibles(), [LATERAL, SUENO]);
+        assert_eq!(a.visibles(), [LATERAL, SUENO, PERILLA]);
         assert_eq!(a.ajuste_visible(), LATERAL);
     }
 

@@ -22,6 +22,7 @@ chispa video               seguir el wallpaper en video (lo lanza solo el gancho
 chispa off / chispa on
 chispa side breathing      la barrita blanca junto al Esc: off fill breathing static
 chispa sleep 5             apagar las luces tras 5 min sin usarlo (never = nunca)
+chispa knob lighting       la perilla: volume (volumen y silencio) o lighting (brillo y efecto)
 chispa battery [--cached]  la batería, solo por 2.4 GHz; --cached: la última leída, al instante
 chispa save                guardar ya lo que está en vivo (lo usa hypridle)
 chispa restore             como estaba antes de usar chispa
@@ -127,8 +128,11 @@ visualizador, `cava`; para seguir al wallpaper, `wallust`.
 - Por radio espera a que sueltes las teclas antes de hablarle: si no, se puede
   perder cuando sueltas una y la compu la repite sin parar.
 - Edita el bloque que regresa el teclado, nunca arma uno nuevo: ahí mismo viven
-  el modo Mac, el polling y la perilla. Se niega a escribir si cambiaría algo que
-  no sea la luz, la barrita o el sleep (y esos dos, solo con valores que existen).
+  el modo Mac y el polling. Se niega a escribir si cambiaría algo que no sea la
+  luz, la barrita, el sleep o la perilla (y esos, solo con valores que existen).
+- Guarda encima de lo que el teclado tiene en ese momento: lo que no quiso
+  cambiar se queda como está (si apretaste la perilla mientras tanto, no la
+  regresa).
 - No escribe si nada cambió, porque esto se guarda en la memoria del teclado.
 - Vuelve a leer lo que escribió; si no quedó igual, regresa como estaba.
 - Antes de la primera escritura respalda los bloques en

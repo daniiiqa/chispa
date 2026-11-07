@@ -43,6 +43,7 @@ const AYUDA_ES: &str = "chispa: la luz del AULA F75 (por cable, 2.4 GHz o Blueto
   chispa side <modo>         la barrita junto al Esc: off fill breathing static
   chispa sleep [never|<min>] apagar las luces sin usarlo (2.4 GHz/Bluetooth), 0.5–20 min
   chispa battery [--cached]  la batería (solo por 2.4 GHz); --cached: la última, sin preguntarle
+  chispa knob [volume|lighting]  la perilla: volumen y silencio, o brillo y efecto
   chispa save                guardar ya el color en vivo (si no, al bloquear la pantalla)
   chispa restore             regresar a como estaba antes de usar chispa
   chispa tui                 todo esto en una ventana, con el teclado dibujado
@@ -68,6 +69,7 @@ const AYUDA_EN: &str = "chispa: lighting for the AULA F75 (wired, 2.4 GHz or Blu
   chispa side <mode>         the light bar next to Esc: off fill breathing static
   chispa sleep [never|<min>] lights off when idle (2.4 GHz/Bluetooth), 0.5–20 min
   chispa battery [--cached]  battery level (2.4 GHz only); --cached: the last one, without asking
+  chispa knob [volume|lighting]  the knob: volume and mute, or brightness and effect
   chispa save                save the live color now (otherwise on screen lock)
   chispa restore             back to how it was before using chispa
   chispa tui                 all of this in a window, with the keyboard drawn
@@ -193,6 +195,10 @@ pub(crate) fn guardar(t: &Teclado, antes: &[u8], ahora: &[u8], tabla: Option<(&[
     if !luz::solo_luz(antes, ahora) {
         return Err(l("iba a cambiar algo que no es de la luz; no escribí nada", "that would change something other than lighting; nothing was written"));
     }
+    // sobre lo que tiene el teclado ahorita, no sobre una copia vieja
+    let fresco = leer_luz(t)?;
+    let ahora = &luz::encima(antes, ahora, &fresco)[..];
+    let antes = &fresco[..];
     let cambia_tabla = tabla.is_some_and(|(a, b)| !luz::misma_tabla(a, b));
     if antes == ahora && !cambia_tabla {
         return Ok(false);
@@ -278,6 +284,7 @@ fn estado(t: &Teclado) -> Result<(), String> {
         println!("{}: {que} ({})", l("en vivo", "live"), l("se guarda al bloquear la pantalla", "saved when the screen locks"));
     }
     println!("{}: {}", l("barrita", "side light"), nombre_lateral(luz::lateral(&b)));
+    println!("{}: {}", l("perilla", "knob"), nombre_perilla(luz::perilla(&b)));
     println!("{}: {}", l("apagar luces sin usarlo", "lights off when idle"), nombre_dormir(luz::dormir(&b)));
     let id = luz::activo(&b);
     if id == 0 {
@@ -372,6 +379,34 @@ fn battery(t: &Teclado) -> Result<(), String> {
         format!(" ({})", l("sin confirmar: falta verla bajar de 100", "unconfirmed: not yet seen below 100"))
     };
     println!("{n}%{nota}");
+    Ok(())
+}
+
+pub(crate) fn nombre_perilla(m: u8) -> String {
+    match m {
+        0 => l("volumen", "volume"),
+        1 => l("luz", "lighting"),
+        n => n.to_string(),
+    }
+}
+
+fn modo_perilla(s: &str) -> Result<u8, String> {
+    match s {
+        "volume" | "volumen" | "media" => Ok(0),
+        "lighting" | "luz" => Ok(1),
+        _ => Err(l("la perilla: volume o lighting", "the knob: volume or lighting")),
+    }
+}
+
+fn knob(t: &Teclado, modo: Option<u8>) -> Result<(), String> {
+    let antes = leer_luz(t)?;
+    let Some(m) = modo else {
+        println!("{}", nombre_perilla(luz::perilla(&antes)));
+        return Ok(());
+    };
+    let mut b = antes.clone();
+    luz::poner_perilla(&mut b, m);
+    listo(guardar(t, &antes, &b, None)?, &format!("{}: {}", l("perilla", "knob"), nombre_perilla(m)));
     Ok(())
 }
 
@@ -762,7 +797,7 @@ fn correr(args: &[String]) -> Result<(), String> {
             println!("{b} {}", if hace < 120 { l("ahorita", "just now") } else { format!("{} min", hace / 60) });
             return Ok(());
         }
-        "dump" | "" | "status" | "mode" | "brightness" | "speed" | "color" | "key" | "look" | "off" | "on" | "side" | "restore" | "sleep" | "battery" => {}
+        "dump" | "" | "status" | "mode" | "brightness" | "speed" | "color" | "key" | "look" | "off" | "on" | "side" | "restore" | "sleep" | "battery" | "knob" => {}
         "wallpaper" => return wallpaper(resto),
         "music" => {
             sostener::terminar(true);
@@ -787,13 +822,17 @@ fn correr(args: &[String]) -> Result<(), String> {
         ("sleep", Some(x)) => Some(medios_minutos(x)?),
         _ => None,
     };
+    let perilla = match (cmd, resto.first()) {
+        ("knob", Some(x)) => Some(modo_perilla(x)?),
+        _ => None,
+    };
     let lado = if cmd == "side" { Some(modo_lateral(uno()?)?) } else { None };
     let col = if cmd == "color" { Some(color_o_error(uno()?)?) } else { None };
     // lo que guarda otra cosa: primero que el de fondo guarde lo sostenido (él
     // necesita el candado, así que antes de abrir). Apagar se lo lleva consigo.
     let sostenido = match cmd {
         "off" => sostener::terminar(false),
-        "mode" | "brightness" | "speed" | "key" | "on" | "side" | "sleep" | "restore" => {
+        "mode" | "brightness" | "speed" | "key" | "on" | "side" | "sleep" | "knob" | "restore" => {
             sostener::terminar(true);
             None
         }
@@ -814,6 +853,7 @@ fn correr(args: &[String]) -> Result<(), String> {
         "side" => side(&t, lado.unwrap_or_default()),
         "sleep" => sleep_(&t, dormir),
         "battery" => battery(&t),
+        "knob" => knob(&t, perilla),
         _ => restore(&t),
     }
 }
