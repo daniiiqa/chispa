@@ -533,10 +533,9 @@ pub(crate) fn color_del_wallpaper(img: Option<&str>) -> Result<(u8, u8, u8), Str
 }
 
 
-/// Lo lanza WallustSwww.sh en cada wallpaper, y va en el fondo. Guardar apaga las
-/// luces un momento, así que de entrada no se adelanta el color con un cuadro: se
-/// vería nuevo, apagado y nuevo otra vez. Solo si hay que esperar (estás tecleando
-/// o el teclado está dormido) se muestra mientras tanto, y se sigue intentando
+/// Lo lanza WallustSwww.sh en cada wallpaper, y va en el fondo: funde al
+/// wallpaper nuevo tecla por tecla y lo deja sostenido (ver sostener.rs). Si el
+/// teclado no contesta (dormido, o una tecla abajo) se sigue intentando un rato,
 /// hasta que le gane un wallpaper más nuevo.
 fn seguir_wallpaper(img: Option<&str>) -> Result<(), String> {
     if !sigue_wallpaper() {
@@ -549,15 +548,12 @@ fn seguir_wallpaper(img: Option<&str>) -> Result<(), String> {
     }
     let m = mapa_del_wallpaper(img)?;
     let vigente = || img.is_none_or(|i| std::fs::canonicalize(i).ok() == wallpaper_actual().ok());
-    for intento in 0..REINTENTOS_WALLPAPER {
+    for _ in 0..REINTENTOS_WALLPAPER {
         if !sigue_wallpaper() || !vigente() {
             return Ok(());
         }
         // sin teclado conectado no hay a quién esperarle
         let Ok(t) = Teclado::abrir() else { return Ok(()) };
-        if intento > 0 {
-            t.adelantar(&m);
-        }
         // si ya se sostiene algo está prendido: no hace falta preguntarle (leer
         // tarda, y mientras el de fondo no puede repetir lo suyo)
         let r = if sostener::sostenido().is_some() {

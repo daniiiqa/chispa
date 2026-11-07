@@ -296,13 +296,6 @@ impl Teclado {
         self.enlace.en_vivo()
     }
 
-    /// Un cuadro al momento y sin soltar el candado, para ver el color mientras
-    /// se guarda. Por cable guardar es rápido y no hace falta.
-    pub fn adelantar(&self, m: &crate::luz::Mapa) {
-        if self.enlace != Enlace::Cable {
-            let _ = self.cuadro_mapa(m);
-        }
-    }
 
     /// Un mapa en vivo y sin soltar el candado.
     fn cuadro_mapa(&self, m: &crate::luz::Mapa) -> Result<(), String> {
