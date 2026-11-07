@@ -1,0 +1,16 @@
+[package]
+name = "chispa"
+version = "0.1.0"
+edition = "2024"
+description = "La luz del AULA F75 desde la terminal: efectos, brillo, color y tecla por tecla, con el look de discada"
+license = "MIT"
+
+[dependencies]
+disco = { git = "https://github.com/daniiiqa/disco" }
+libc = "0.2"
+ratatui = "0.29"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

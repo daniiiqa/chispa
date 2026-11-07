@@ -1,0 +1,6 @@
+# AULA F75: que el usuario de la sesión pueda hablarle sin root.
+# Por cable (258a:010c), dongle 2.4 GHz (3554:fa09), Bluetooth (3554:fa07 o fa08).
+KERNEL=="hidraw*", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="010c", TAG+="uaccess"
+KERNEL=="hidraw*", KERNELS=="*:3554:FA09.*", TAG+="uaccess"
+KERNEL=="hidraw*", KERNELS=="*:3554:FA07.*", TAG+="uaccess"
+KERNEL=="hidraw*", KERNELS=="*:3554:FA08.*", TAG+="uaccess"
