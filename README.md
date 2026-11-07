@@ -17,7 +17,8 @@ chispa look                con el color del look, oscurecido para que se vean la
 chispa off / chispa on
 chispa side breathing      la barrita blanca junto al Esc: off fill breathing static
 chispa sleep 5             apagar las luces tras 5 min sin usarlo (never = nunca)
-chispa battery             la batería, solo por 2.4 GHz (sin confirmar hasta verla bajar de 100)
+chispa battery [--cached]  la batería, solo por 2.4 GHz (sin confirmar hasta verla bajar de 100);
+                           --cached: la última leída, al instante (la usa el menú)
 chispa save                guardar ya el color en vivo (lo usa hypridle)
 chispa restore             como estaba antes de usar chispa
 chispa tui                 todo esto en una ventana, con el teclado dibujado

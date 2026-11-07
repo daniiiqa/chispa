@@ -42,7 +42,7 @@ const AYUDA_ES: &str = "chispa: la luz del AULA F75 (por cable, 2.4 GHz o Blueto
   chispa off | on            apagar, y regresar al último efecto
   chispa side <modo>         la barrita junto al Esc: off fill breathing static
   chispa sleep [never|<min>] apagar las luces sin usarlo (2.4 GHz/Bluetooth), 0.5–20 min
-  chispa battery             la batería (solo por 2.4 GHz)
+  chispa battery [--cached]  la batería (solo por 2.4 GHz); --cached: la última, sin preguntarle
   chispa save                guardar ya el color en vivo (si no, al bloquear la pantalla)
   chispa restore             regresar a como estaba antes de usar chispa
   chispa tui                 todo esto en una ventana, con el teclado dibujado
@@ -67,7 +67,7 @@ const AYUDA_EN: &str = "chispa: lighting for the AULA F75 (wired, 2.4 GHz or Blu
   chispa off | on            turn off, and back to the last effect
   chispa side <mode>         the light bar next to Esc: off fill breathing static
   chispa sleep [never|<min>] lights off when idle (2.4 GHz/Bluetooth), 0.5–20 min
-  chispa battery             battery level (2.4 GHz only)
+  chispa battery [--cached]  battery level (2.4 GHz only); --cached: the last one, without asking
   chispa save                save the live color now (otherwise on screen lock)
   chispa restore             back to how it was before using chispa
   chispa tui                 all of this in a window, with the keyboard drawn
@@ -331,8 +331,31 @@ fn bateria_confirmada() -> bool {
     estado_dir().join("bateria-confirmada").exists()
 }
 
+/// La última batería que se leyó: "n segundos", para enseñarla sin hablarle al
+/// teclado (por radio, con el video mandando cuadros, leer tarda ~5 s).
+fn bateria_guardada() -> PathBuf {
+    estado_dir().join("bateria")
+}
+
+fn anotar_bateria(n: u8) {
+    let ahora = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let _ = std::fs::create_dir_all(estado_dir());
+    let _ = std::fs::write(bateria_guardada(), format!("{n} {ahora}\n"));
+}
+
+/// "87%" o "100% (?)", y hace cuánto se leyó, sin tocar el teclado.
+fn bateria_de_memoria() -> Option<(String, u64)> {
+    let t = std::fs::read_to_string(bateria_guardada()).ok()?;
+    let (n, cuando) = t.trim().split_once(' ')?;
+    let (n, cuando): (u8, u64) = (n.parse().ok()?, cuando.parse().ok()?);
+    let ahora = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let texto = if bateria_confirmada() || n < 100 { format!("{n}%") } else { format!("{n}% (?)") };
+    Some((texto, ahora.saturating_sub(cuando)))
+}
+
 pub(crate) fn texto_bateria(t: &Teclado) -> Option<String> {
     let n = t.bateria().ok()?;
+    anotar_bateria(n);
     if n < 100 && !bateria_confirmada() {
         let _ = std::fs::create_dir_all(estado_dir());
         let _ = std::fs::write(estado_dir().join("bateria-confirmada"), n.to_string());
@@ -342,6 +365,7 @@ pub(crate) fn texto_bateria(t: &Teclado) -> Option<String> {
 
 fn battery(t: &Teclado) -> Result<(), String> {
     let n = t.bateria()?;
+    anotar_bateria(n);
     let nota = if bateria_confirmada() || n < 100 {
         String::new()
     } else {
@@ -733,6 +757,12 @@ fn correr(args: &[String]) -> Result<(), String> {
         "tui" => return tui::correr(),
         "keys" => {
             println!("{}", luz::TECLAS.iter().map(|k| k.0).collect::<Vec<_>>().join(" "));
+            return Ok(());
+        }
+        // la última leída, al instante y sin hablarle al teclado (para menús)
+        "battery" if resto.first().is_some_and(|a| a == "--cached") => {
+            let (b, hace) = bateria_de_memoria().ok_or_else(|| l("todavía no se ha leído", "not read yet"))?;
+            println!("{b} {}", if hace < 120 { l("ahorita", "just now") } else { format!("{} min", hace / 60) });
             return Ok(());
         }
         "dump" | "" | "status" | "mode" | "brightness" | "speed" | "color" | "key" | "look" | "off" | "on" | "side" | "restore" | "sleep" | "battery" => {}
