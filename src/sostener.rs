@@ -51,7 +51,7 @@ fn leer_mapa() -> Option<Mapa> {
     de_texto(&std::fs::read_to_string(archivo_color()).ok()?)
 }
 
-fn de_texto(t: &str) -> Option<Mapa> {
+pub(crate) fn de_texto(t: &str) -> Option<Mapa> {
     let mut m = Mapa::new();
     for r in t.lines().map(str::trim).filter(|r| !r.is_empty()) {
         match r.split_once(' ') {
@@ -69,7 +69,7 @@ fn escribir_mapa(m: &Mapa) -> Result<(), String> {
     std::fs::rename(&tmp, &f).map_err(|e| format!("{}: {e}", f.display()))
 }
 
-fn a_texto(m: &Mapa) -> String {
+pub(crate) fn a_texto(m: &Mapa) -> String {
     m.iter().map(|(led, (r, g, b))| format!("{led} #{r:02x}{g:02x}{b:02x}\n")).collect()
 }
 

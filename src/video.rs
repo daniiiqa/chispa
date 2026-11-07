@@ -318,6 +318,28 @@ impl Medida {
     }
 }
 
+/// Lo que se está viendo, para que la TUI lo dibuje (se escribe 4 veces por segundo).
+fn archivo_vivo() -> PathBuf {
+    runtime().join("chispa-video.vivo")
+}
+
+pub fn mapa_vivo() -> Option<luz::Mapa> {
+    if !activo() {
+        return None;
+    }
+    crate::sostener::de_texto(&std::fs::read_to_string(archivo_vivo()).ok()?)
+}
+
+/// Parar o volver a seguir el video (el botón de la TUI).
+pub fn parar() {
+    if let Some(p) = std::fs::read_to_string(archivo_pid()).ok().and_then(|p| p.trim().parse::<i32>().ok())
+        && activo()
+    {
+        // SAFETY: solo una señal a un pid que es chispa.
+        unsafe { libc::kill(p, libc::SIGTERM) };
+    }
+}
+
 fn archivo_medida() -> PathBuf {
     runtime().join("chispa-video.stat")
 }
@@ -374,12 +396,7 @@ pub fn correr(args: &[String]) -> Result<(), String> {
         None => false,
         Some("--auto") => true,
         Some("stop") => {
-            if let Some(p) = std::fs::read_to_string(archivo_pid()).ok().and_then(|p| p.trim().parse::<i32>().ok())
-                && activo()
-            {
-                // SAFETY: solo una señal a un pid que es chispa.
-                unsafe { libc::kill(p, libc::SIGTERM) };
-            }
+            parar();
             return Ok(());
         }
         Some(o) => return Err(format!("{}: {o} (chispa help)", l("no conozco esa opción", "unknown option"))),
@@ -411,8 +428,7 @@ pub fn correr(args: &[String]) -> Result<(), String> {
         libc::signal(libc::SIGHUP, al_parar as *const () as libc::sighandler_t);
     }
     let r = bucle(mpv, auto);
-    let _ = std::fs::remove_file(archivo_pid());
-    let _ = std::fs::remove_file(archivo_medida());
+    tocando(false);
     r
 }
 
@@ -432,6 +448,7 @@ fn tocando(si: bool) {
     } else {
         let _ = std::fs::remove_file(archivo_pid());
         let _ = std::fs::remove_file(archivo_medida());
+        let _ = std::fs::remove_file(archivo_vivo());
     }
 }
 
@@ -445,6 +462,7 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
     let mut antes: HashMap<u8, [f32; 3]> = HashMap::new();
     let mut ultimo: Vec<(Rgb, Vec<u8>)> = Vec::new();
     let mut medida = Medida::new();
+    let mut escrito = Instant::now();
     let paso = Duration::from_secs_f64(1.0 / FPS as f64);
     let mut siguiente = Instant::now();
     tocando(true);
@@ -533,6 +551,10 @@ fn bucle(mut mpv: Mpv, auto: bool) -> Result<(), String> {
             continue;
         }
         medida.contar(t0.elapsed(), n.enlace());
+        if escrito.elapsed() >= Duration::from_millis(250) {
+            escrito = Instant::now();
+            let _ = std::fs::write(archivo_vivo(), crate::sostener::a_texto(&colores));
+        }
         ultimo = grupos;
     }
     Ok(())

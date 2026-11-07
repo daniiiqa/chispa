@@ -181,6 +181,10 @@ pub struct App {
     enlace: String,
     /// el teclado sigue al wallpaper
     sigue: bool,
+    /// lo que enseña el video ahorita, para dibujarlo
+    vivo: Option<luz::Mapa>,
+    /// hay wallpaper en video (se revisa cada segundo: buscarlo recorre /proc)
+    hay_video: bool,
     /// la batería al abrir o releer (solo por radio)
     bateria: Option<String>,
     /// lo pendiente se escogió a mano: deja de seguir al wallpaper al guardarse
@@ -215,6 +219,8 @@ impl App {
             enlace: String::new(),
             sigue: false,
             bateria: None,
+            vivo: None,
+            hay_video: false,
             manual: false,
             hay_wallust: false,
             hay_look: false,
@@ -372,6 +378,7 @@ impl App {
             KeyCode::Char('o') => return Some(Accion::Prender),
             KeyCode::Char('w') => return Some(Accion::Wallpaper),
             KeyCode::Char('m') if self.hay_cava => return Some(Accion::Musica),
+            KeyCode::Char('v') if self.hay_video => return Some(Accion::Video),
             KeyCode::Char('s') if crate::sostener::sostenido().is_some() => return Some(Accion::Guardar),
             KeyCode::Char('r') => self.modo = Modo::Restaurar,
             KeyCode::Char('u') => return Some(Accion::Releer),
@@ -679,6 +686,17 @@ impl App {
                 }
                 self.sigue = sigue_wallpaper();
             }
+            Accion::Video => {
+                if crate::video::activo() {
+                    crate::video::parar();
+                    self.aviso = l("ya no sigue al video (w o el próximo wallpaper lo regresan)", "stopped following the video (w or the next wallpaper bring it back)");
+                } else if sigue_wallpaper() {
+                    crate::video::lanzar_fondo();
+                    self.aviso = l("siguiendo al video", "following the video");
+                } else {
+                    self.aviso = l("primero sigue al wallpaper (w)", "follow the wallpaper first (w)");
+                }
+            }
             Accion::Guardar => {
                 crate::sostener::terminar(true);
                 self.releer_con(|_| Ok(()));
@@ -751,6 +769,8 @@ enum Accion {
     Musica,
     /// guardar ya lo que está en vivo (parpadea)
     Guardar,
+    /// dejar o volver a seguir el wallpaper en video
+    Video,
 }
 
 /// Un renglón hecho de pedazos, y cada pedazo con lo que pasa si se le pica.
@@ -806,6 +826,11 @@ fn botones(app: &App, look: &Look) -> Vec<(Span<'static>, Option<Clic>)> {
             if app.hay_cava {
                 let que = if crate::en_musica() { l("sin música", "music off") } else { l("música", "music") };
                 b("m", que, KeyCode::Char('m'));
+            }
+            if app.vivo.is_some() {
+                b("v", l("sin video", "video off"), KeyCode::Char('v'));
+            } else if crate::sigue_wallpaper() && app.hay_video {
+                b("v", "video".into(), KeyCode::Char('v'));
             }
             if crate::sostener::sostenido().is_some() {
                 b("s", l("guardar", "save"), KeyCode::Char('s'));
@@ -866,7 +891,7 @@ fn dibujar(f: &mut Frame, app: &App, look: &Look) {
     };
     if let Some(m) = modo {
         // por cable no hay en vivo: el visualizador y el video se pausan
-        let pausa = if crate::hid::hay_cable() && (crate::en_musica() || crate::video::hay_mpvpaper()) {
+        let pausa = if (crate::en_musica() || app.hay_video) && crate::hid::hay_cable() {
             format!(" ({})", l("en pausa por cable", "paused on cable"))
         } else {
             String::new()
@@ -1111,7 +1136,8 @@ fn dibujar_teclado(f: &mut Frame, a: Rect, app: &App, look: &Look) {
     for (nf, fila) in FILAS.iter().enumerate() {
         let mut sp = vec![(Span::raw(" "), None)];
         for (nc, (txt, nombre, ancho)) in fila.iter().enumerate() {
-            let (r, g, b) = app.color_tecla(led(nombre));
+            let n = led(nombre);
+            let (r, g, b) = app.vivo.as_ref().and_then(|m| m.iter().find(|x| x.0 as usize == n)).map_or_else(|| app.color_tecla(n), |x| x.1);
             let claro = 299 * r as u32 + 587 * g as u32 + 114 * b as u32 > 128_000;
             let tinta = if claro { Color::Black } else { Color::White };
             let mut estilo = Style::new().bg(Color::Rgb(r, g, b)).fg(tinta);
@@ -1157,11 +1183,21 @@ pub fn correr() -> Result<(), String> {
     app.hay_look = color_del_look().is_ok();
     app.hay_cava = hay_programa("cava");
     let mut look = Look::load("chispa");
+    let mut refrescado = Instant::now() - Duration::from_secs(1);
+    let mut buscado_video = Instant::now() - Duration::from_secs(2);
     let mut term = ratatui::init();
     let _ = execute!(std::io::stdout(), EnableMouseCapture);
     let r = (|| -> Result<(), String> {
         while !app.salir {
             look.refresh();
+            if refrescado.elapsed() >= Duration::from_millis(250) {
+                refrescado = Instant::now();
+                app.vivo = crate::video::mapa_vivo();
+            }
+            if buscado_video.elapsed() >= Duration::from_secs(1) {
+                buscado_video = Instant::now();
+                app.hay_video = crate::video::hay_mpvpaper();
+            }
             term.draw(|f| dibujar(f, &app, &look)).map_err(|e| e.to_string())?;
             let ahora = Instant::now();
             if app.vencio(ahora) {
