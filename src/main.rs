@@ -7,6 +7,7 @@ mod hid;
 mod luz;
 mod musica;
 mod radio;
+mod saludo;
 mod sostener;
 mod tui;
 mod video;
@@ -38,6 +39,7 @@ const AYUDA_ES: &str = "chispa: la luz del AULA F75 (por cable, 2.4 GHz o Blueto
   chispa look                el teclado con el color del look de discada
   chispa wallpaper           el teclado sigue a los colores del wallpaper
   chispa music               el visualizador: barras con el audio (Ctrl+C o `music stop`)
+  chispa saludo              un barrido de luz con el color del look (la entrada de discada)
   chispa video               con wallpaper en video, el teclado lo sigue en vivo (solo, al seguir al wallpaper)
   chispa off | on            apagar, y regresar al último efecto
   chispa side <modo>         la barrita junto al Esc: off fill breathing static
@@ -64,6 +66,7 @@ const AYUDA_EN: &str = "chispa: lighting for the AULA F75 (wired, 2.4 GHz or Blu
   chispa look                paint the keyboard with the discada look's color
   chispa wallpaper           the keyboard follows the wallpaper's colors
   chispa music               the visualizer: bars with the audio (Ctrl+C or `music stop`)
+  chispa saludo              a sweep of light in the look's color (discada's entrance)
   chispa video               with a video wallpaper, the keyboard follows it live (automatic when following the wallpaper)
   chispa off | on            turn off, and back to the last effect
   chispa side <mode>         the light bar next to Esc: off fill breathing static
@@ -804,6 +807,11 @@ fn correr(args: &[String]) -> Result<(), String> {
             return musica::correr(resto);
         }
         "hold" => return sostener::correr(),
+        // la entrada de discada: un barrido con el color del look (Entrada.sh)
+        "saludo" => {
+            sostener::terminar(true);
+            return saludo::correr();
+        }
         "video" => return video::correr(resto),
         "save" => {
             sostener::terminar(true);
